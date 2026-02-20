@@ -1,4 +1,5 @@
 from oauth2client.service_account import ServiceAccountCredentials
+from selenium.common.exceptions import TimeoutException
 import gspread
 from getpass import getpass
 import time
@@ -157,6 +158,10 @@ def pesquisar_primeiro_sei(driver: Driver, sei: str):
     print("✅ Clique na lupa executado.")
     time.sleep(2)
 
+def aguardar_pos_login(driver: Driver, timeout_seg: int = 60) -> None:
+    wait = WebDriverWait(driver, timeout_seg)
+    wait.until(EC.presence_of_element_located((By.ID, "txtPesquisaRapida")))
+
 def main():
     client = conectar_google_sheets()
     sh = client.open_by_key(PLANILHA_ID)
@@ -177,17 +182,19 @@ def main():
         print(f"Linha {item['linha']}: {item['sei']}")
 
     driver = Driver(uc=True)
-    driver.maximize_window()  # ✅ agora sim
+    driver.maximize_window()
 
     acessar_sei_login(driver, SEI_USUARIO, SEI_SENHA, SEI_UNIDADE)
 
-    input("✅ Se houver 2FA, conclua e pressione ENTER para pesquisar o 1º SEI...")
+    print("⏳ Aguardando carregar o SEI após login...")
+    aguardar_pos_login(driver, timeout_seg=60)
 
     primeiro_sei = itens[0]["sei"]
-    print(f"🔎 Pesquisando o 1º SEI: {primeiro_sei}")
     pesquisar_primeiro_sei(driver, primeiro_sei)
 
-    input("✅ Pesquisou o 1º SEI. ENTER para encerrar...")
+    print("✅ Processo concluído.")
+    input("🔴 Pressione ENTER para fechar o navegador...")
+    driver.quit()
 
 
 if __name__ == "__main__":
