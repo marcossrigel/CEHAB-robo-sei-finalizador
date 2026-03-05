@@ -162,6 +162,32 @@ def get_seis_enviados(dados: list[dict]) -> list[str]:
             out.append(s)
     return out
 
+
+def esperar_sumir_aguarde(sb: SB, timeout: int = 20):
+    """
+    Espera o SEI terminar de carregar a árvore (quando aparece 'Aguarde...').
+    """
+    for _ in range(timeout * 2):  # checa a cada 0.5s
+        try:
+            if not sb.is_text_visible("Aguarde"):
+                return
+        except Exception:
+            pass
+        sb.sleep(0.5)
+
+
+def abrir_todas_as_pastas(sb: SB, limite: int = 10):
+    for i in range(1, limite + 1):
+        xp = f"//*[@id='joinPASTA{i}']"
+        try:
+            if sb.is_element_present(xp):
+                sb.js_click(xp)
+                print(f"📂 Clique na Pasta {i}")
+                esperar_sumir_aguarde(sb, timeout=20)
+                sb.sleep(0.3)
+        except Exception:
+            pass
+
 # =========================
 # 1) PESQUISAR UM SEI
 # =========================
@@ -297,24 +323,31 @@ if __name__ == "__main__":
         login_sei(sb, orgao="CEHAB")
         print("✅ Logado no SEI com sucesso!")
 
+        # 1) pesquisa o SEI
         pesquisar_sei(sb, sei_teste)
 
+        # 2) vai pra árvore (iframe)
         switch_to_arvore(sb)
 
-        expandir_toda_arvore(sb)
-        sb.sleep(1.5)
+        # 3) abre pastas I, II, III...
+        abrir_todas_as_pastas(sb, limite=10)
 
-        switch_to_arvore(sb)
+        # 4) garante que acabou "Aguarde..."
+        esperar_sumir_aguarde(sb, timeout=20)
+        sb.sleep(0.5)
 
-        expandir_toda_arvore(sb)
-        sb.sleep(2)
-
+        # ====== (A) LISTAR TUDO (debug) ======
         arquivos = listar_todos_os_arquivos_na_arvore(sb)
-
-        sb.switch_to_default_content()
-
         print(f"📄 Itens encontrados na árvore: {len(arquivos)}")
         for a in arquivos:
             print(" -", a)
+
+        # ====== (B) PEGAR ÚLTIMA NOTA FISCAL ======
+        nota = buscar_ultima_nota_fiscal(sb)
+        print("🧾 Última Nota Fiscal encontrada:", nota)
+        print("📌 Resultado final:", {sei_teste: nota})
+
+        # volta pro conteúdo padrão
+        sb.switch_to_default_content()
 
         input("ENTER para fechar...")
