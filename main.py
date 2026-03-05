@@ -1,4 +1,3 @@
-
 from seleniumbase import SB
 import os
 import re
@@ -7,7 +6,7 @@ from google.oauth2.service_account import Credentials
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1lkM9yOjhu_D2nQjRFl-Wt6lNgWPvzl2wbQiaO633-KM/edit"
 SHEET_ID  = "1lkM9yOjhu_D2nQjRFl-Wt6lNgWPvzl2wbQiaO633-KM"
-WORKSHEET_GID = 1189147903 
+WORKSHEET_GID = 1189147903
 CRED_JSON = r"formulariosolicitacaopagamento-6292734a5ede.json"
 
 SCOPES = [
@@ -20,10 +19,10 @@ SEI_LOGIN_URL = "https://sei.pe.gov.br/sip/login.php?sigla_orgao_sistema=GOVPE&s
 XP_USUARIO = '//*[@id="txtUsuario"]'
 XP_SENHA = '//*[@id="pwdSenha"]'
 CSS_SELECT_ORGAO = "#selOrgao"
+CSS_BTN_ACESSAR = "#sbmAcessar"
 
-CSS_BTN_ACESSAR = "#sbmAcessar" 
 XP_TXT_PESQUISA_RAPIDA = '//*[@id="txtPesquisaRapida"]'
-
+XP_BTN_LUPA_PESQUISA = '//*[@id="spnInfraUnidade"]/img'  # lupa
 
 def login_sei(sb: SB, orgao: str = "CEHAB") -> None:
     sei_user = os.getenv("SEI_USER", "marcos.rigel")
@@ -82,7 +81,6 @@ def read_sheet_rows(sheet_url_or_id: str, gid: int):
 
     sheet_id = _extract_sheet_id(sheet_url_or_id)
     sh = gc.open_by_key(sheet_id)
-
     ws = _open_worksheet_by_gid(sh, gid)
 
     rows = ws.get_all_values()
@@ -92,7 +90,6 @@ def read_sheet_rows(sheet_url_or_id: str, gid: int):
     header = [h.strip() for h in rows[0]]
     data = []
     for r in rows[1:]:
-
         r = r + [""] * (len(header) - len(r))
         data.append({header[i]: r[i].strip() for i in range(len(header))})
 
@@ -102,7 +99,6 @@ def normalize(s: str) -> str:
     return (s or "").strip().upper()
 
 def get_seis_enviados(dados: list[dict]) -> list[str]:
-
     if not dados:
         return []
 
@@ -129,6 +125,7 @@ def get_seis_enviados(dados: list[dict]) -> list[str]:
             if sei:
                 seis.append(sei)
 
+    # remove duplicados mantendo ordem
     seen = set()
     out = []
     for s in seis:
@@ -136,6 +133,129 @@ def get_seis_enviados(dados: list[dict]) -> list[str]:
             seen.add(s)
             out.append(s)
     return out
+
+# =========================
+# 1) PESQUISAR UM SEI
+# =========================
+def pesquisar_sei(sb: SB, sei: str) -> None:
+    sb.wait_for_element_visible(XP_TXT_PESQUISA_RAPIDA, timeout=30)
+    sb.click(XP_TXT_PESQUISA_RAPIDA)
+    sb.clear(XP_TXT_PESQUISA_RAPIDA)
+    sb.type(XP_TXT_PESQUISA_RAPIDA, sei)
+
+    sb.wait_for_element_clickable(XP_BTN_LUPA_PESQUISA, timeout=30)
+    try:
+        sb.click(XP_BTN_LUPA_PESQUISA)
+    except Exception:
+        sb.js_click(XP_BTN_LUPA_PESQUISA)
+
+    sb.wait_for_ready_state_complete()
+    sb.sleep(1.2)  # dá tempo da árvore renderizar
+
+# =========================
+# 2) PEGAR ÚLTIMA "NOTA FISCAL" DA ÁRVORE
+def buscar_ultima_nota_fiscal(sb: SB) -> str | None:
+    """
+    Procura na árvore do SEI qualquer item contendo 'Nota Fiscal'
+    e retorna o último encontrado.
+    """
+
+    xp_notas = "//a[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'NOTA FISCAL')]"
+
+    sb.wait_for_ready_state_complete()
+    sb.sleep(2)
+
+    try:
+        elementos = sb.find_elements(xp_notas)
+    except Exception:
+        elementos = []
+
+    notas = []
+    for el in elementos:
+        try:
+            texto = el.text.strip()
+            if "NOTA FISCAL" in texto.upper():
+                notas.append(texto)
+        except:
+            pass
+
+    if not notas:
+        return None
+
+    return notas[-1]
+
+
+# ========= ÁRVORE / PASTAS =========
+
+def switch_to_arvore(sb: SB) -> None:
+    """
+    No SEI, a árvore geralmente fica em um iframe (comum: 'ifrArvore').
+    Tenta trocar automaticamente para o frame certo.
+    """
+    sb.switch_to_default_content()
+
+    # tenta nomes comuns do SEI
+    for name in ["ifrArvore", "ifrArvoreHtml", "ifrArvoreVisualizacao", "ifrArvoreProcesso"]:
+        try:
+            sb.switch_to_frame(name)
+            return
+        except Exception:
+            pass
+
+    # fallback: tenta qualquer iframe e valida se parece ser árvore (tem pastas/links)
+    frames = sb.find_elements("xpath=//iframe")
+    for fr in frames:
+        try:
+            sb.switch_to_default_content()
+            sb.switch_to_frame(fr)
+            # “cheiro” de árvore: tem itens/links na coluna esquerda
+            if sb.is_element_present("xpath=//a") and (sb.is_text_visible("I") or sb.is_text_visible("II")):
+                return
+        except Exception:
+            pass
+
+    sb.switch_to_default_content()
+    raise RuntimeError("Não consegui localizar o iframe da árvore (ifrArvore).")
+
+
+def expandir_toda_arvore(sb: SB, max_passes: int = 25) -> None:
+    """
+    Clica repetidamente nos ícones de expandir (+) até não sobrar nenhum.
+    Isso garante que a pasta I, II etc. ficam abertas.
+    """
+    # XPaths comuns para “expandir”
+    xp_expand = (
+        "//img["
+        "contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'expandir')"
+        " or contains(translate(@alt,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'expandir')"
+        " or contains(@src,'mais') or contains(@src,'plus') or contains(@src,'expand')"
+        "]"
+    )
+
+    for _ in range(max_passes):
+        sb.wait_for_ready_state_complete()
+        sb.sleep(0.4)
+
+        try:
+            buttons = sb.find_elements(f"xpath={xp_expand}")
+        except Exception:
+            buttons = []
+
+        if not buttons:
+            break
+
+        clicked_any = False
+        for b in buttons[:40]:  # evita loop infinito se tiver muita coisa
+            try:
+                # alguns ícones são minúsculos: js_click costuma ser mais confiável
+                sb.js_click(b)
+                clicked_any = True
+                sb.sleep(0.15)
+            except Exception:
+                pass
+
+        if not clicked_any:
+            break
 
 
 if __name__ == "__main__":
@@ -146,11 +266,33 @@ if __name__ == "__main__":
     seis_enviados = get_seis_enviados(dados)
     print(f"📌 SEIs com STATUS=ENVIADO: {len(seis_enviados)}")
 
-    for sei in seis_enviados:
-        print(" -", sei)
+    # ENSAIO: só o primeiro
+    if not seis_enviados:
+        raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
+
+    sei_teste = seis_enviados[0]
+    print("🧪 SEI de teste:", sei_teste)
 
     with SB(uc=False, headless=False, test=False) as sb:
         login_sei(sb, orgao="CEHAB")
         print("✅ Logado no SEI com sucesso!")
+
+        pesquisar_sei(sb, sei_teste)
+
+        # vai pra árvore (iframe)
+        switch_to_arvore(sb)
+
+        # abre todas as pastas (inclui I e II)
+        expandir_toda_arvore(sb)
+
+        # agora sim pega a última Nota Fiscal
+        nota = buscar_ultima_nota_fiscal_na_arvore(sb)
+
+        # volta pro conteúdo padrão (boa prática)
+        sb.switch_to_default_content()
+
+        resultado = {sei_teste: nota}
+        print("📌 Resultado:")
+        print(resultado)
 
         input("ENTER para fechar...")
