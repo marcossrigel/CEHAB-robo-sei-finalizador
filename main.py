@@ -305,6 +305,114 @@ def expandir_toda_arvore(sb: SB, max_passes: int = 25) -> None:
             break
 
 
+def detectar_pastas(sb: SB) -> list[int]:
+    """
+    Encontra todos os elementos com id joinPASTA{n} e retorna [n] ordenado.
+    Ex: [1,2,3]
+    """
+    # pega todos elementos cujo id começa com joinPASTA
+    els = sb.find_elements("//a[starts-with(@id,'joinPASTA')] | //* [starts-with(@id,'joinPASTA')]")
+    nums = []
+    for el in els:
+        try:
+            _id = el.get_attribute("id") or ""
+            m = re.match(r"joinPASTA(\d+)", _id)
+            if m:
+                nums.append(int(m.group(1)))
+        except Exception:
+            pass
+
+    # remove duplicados e ordena
+    nums = sorted(set(nums))
+    return nums
+
+def coletar_itens_visiveis(sb: SB) -> list[str]:
+    """
+    Coleta textos dos <a> visíveis/úteis dentro da árvore.
+    (mesma ideia da sua listar_todos..., mas retorna lista limpa)
+    """
+    els = sb.find_elements("//a")
+    itens = []
+    for el in els:
+        try:
+            t = (el.text or "").strip()
+            # filtra lixos comuns
+            if not t:
+                continue
+            if t.lower() == "aguarde...":
+                continue
+            if len(t) < 2:
+                continue
+            itens.append(t)
+        except Exception:
+            pass
+
+    # remove duplicados mantendo ordem
+    seen = set()
+    out = []
+    for t in itens:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
+    """
+    Garante que a pasta fique ABERTA e retorna os itens que pertencem a ela.
+
+    - Se a pasta já estava aberta, o 1º clique fecha (lista diminui).
+      Aí a gente clica de novo para abrir e calcula itens = (aberta - fechada).
+    - Se a pasta estava fechada, o 1º clique abre (lista aumenta).
+      Aí itens = (aberta - antes).
+    """
+    def snap():
+        esperar_sumir_aguarde(sb, timeout=30)
+        sb.sleep(0.4)
+        return coletar_itens_visiveis(sb)
+
+    xp = f"//*[@id='joinPASTA{pasta_num}']"
+    if not sb.is_element_present(xp):
+        return []
+
+    antes_lista = snap()
+    antes_set = set(antes_lista)
+
+    # 1º clique (pode abrir OU fechar)
+    try:
+        sb.js_click(xp)
+    except Exception:
+        sb.click(xp)
+
+    print(f"📂 Alternando Pasta {pasta_num} ...")
+    depois1_lista = snap()
+    depois1_set = set(depois1_lista)
+
+    # Se diminuiu, provavelmente FECHOU -> clica de novo pra ABRIR
+    if len(depois1_set) < len(antes_set):
+        fechado_lista = depois1_lista
+        fechado_set = depois1_set
+
+        try:
+            sb.js_click(xp)
+        except Exception:
+            sb.click(xp)
+
+        depois2_lista = snap()
+        depois2_set = set(depois2_lista)
+
+        # itens da pasta = (aberto - fechado), mantendo a ordem do "aberto"
+        diff = depois2_set - fechado_set
+        itens = [t for t in depois2_lista if t in diff]
+        return itens
+
+    # Caso normal: ABRIU no 1º clique
+    diff = depois1_set - antes_set
+    itens = [t for t in depois1_lista if t in diff]
+    return itens
+
+def is_nota_fiscal(texto: str) -> bool:
+    return "NOTA FISCAL" in (texto or "").upper()
+
 if __name__ == "__main__":
     aba, dados = read_sheet_rows(SHEET_ID, WORKSHEET_GID)
     print(f"✅ Aba lida: {aba}")
@@ -329,25 +437,36 @@ if __name__ == "__main__":
         # 2) vai pra árvore (iframe)
         switch_to_arvore(sb)
 
-        # 3) abre pastas I, II, III...
-        abrir_todas_as_pastas(sb, limite=10)
+        # 3) espera carregar
+        esperar_sumir_aguarde(sb, timeout=30)
+        sb.sleep(0.6)
 
-        # 4) garante que acabou "Aguarde..."
-        esperar_sumir_aguarde(sb, timeout=20)
-        sb.sleep(0.5)
+        # 4) detecta quantas pastas existem
+        pastas = detectar_pastas(sb)
+        print("📌 Pastas detectadas:", pastas if pastas else "Nenhuma joinPASTA encontrada")
 
-        # ====== (A) LISTAR TUDO (debug) ======
-        arquivos = listar_todos_os_arquivos_na_arvore(sb)
-        print(f"📄 Itens encontrados na árvore: {len(arquivos)}")
-        for a in arquivos:
-            print(" -", a)
+        ultima_nota = None
+        itens_por_pasta: dict[int, list[str]] = {}
 
-        # ====== (B) PEGAR ÚLTIMA NOTA FISCAL ======
-        nota = buscar_ultima_nota_fiscal(sb)
-        print("🧾 Última Nota Fiscal encontrada:", nota)
-        print("📌 Resultado final:", {sei_teste: nota})
+        # 5) abre em ordem e lista os arquivos “novos” de cada pasta
+        for p in pastas:
+            # (opcional, mas ajuda se o SEI “perder” o frame em algum momento)
+            switch_to_arvore(sb)
 
-        # volta pro conteúdo padrão
+            novos = abrir_pasta_e_pegar_itens(sb, p)
+            itens_por_pasta[p] = novos
+
+            print(f"📄 Itens da Pasta {p}: {len(novos)}")
+            for item in novos:
+                print(" -", item)
+                if is_nota_fiscal(item):
+                    ultima_nota = item
+
+            sb.sleep(0.8)
+         # “com calma” entre pastas
+
+        print("\n🧾 Última Nota Fiscal encontrada:", ultima_nota)
+        print("📌 Resultado final:", {sei_teste: ultima_nota})
+
         sb.switch_to_default_content()
-
         input("ENTER para fechar...")
