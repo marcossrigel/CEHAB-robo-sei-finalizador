@@ -145,10 +145,9 @@ if __name__ == "__main__":
 
     seis_enviados = get_seis_enviados(dados)
     print(f"📌 SEIs com STATUS=ENVIADO: {len(seis_enviados)}")
-    for sei in seis_enviados[:20]:
+
+    for sei in seis_enviados:
         print(" -", sei)
-    if len(seis_enviados) > 20:
-        print("...")
 
     with SB(uc=False, headless=False, test=False) as sb:
         login_sei(sb, orgao="CEHAB")
