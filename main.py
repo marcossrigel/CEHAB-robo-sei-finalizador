@@ -1,6 +1,8 @@
 from seleniumbase import SB
 import os
 import re
+import glob
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 import json
@@ -100,6 +102,53 @@ def read_sheet_rows(sheet_url_or_id: str, gid: int):
 
 def normalize(s: str) -> str:
     return (s or "").strip().upper()
+
+
+def _sanitize_filename(s: str) -> str:
+    # troca caracteres ruins pra nome de arquivo
+    return re.sub(r'[\\/:*?"<>|]+', "_", s)
+
+def baixar_pdf_visualizador(sb: SB, pasta="notas_fiscais", nome="nota.pdf", timeout=60):
+    os.makedirs(pasta, exist_ok=True)
+
+    sb.switch_to_default_content()
+    iframe_encontrado = False
+    for fr in sb.find_elements("xpath=//iframe"):
+        try:
+            sb.switch_to_default_content()
+            sb.switch_to_frame(fr)
+            if sb.is_element_present('xpath=//*[@id="icon"]/cr-icon'):
+                iframe_encontrado = True
+                break
+        except Exception:
+            pass
+
+    if not iframe_encontrado:
+        sb.switch_to_default_content()
+
+    XP_DOWNLOAD = '//*[@id="icon"]/cr-icon'
+    sb.wait_for_element_clickable(XP_DOWNLOAD, timeout=20)
+    sb.js_click(XP_DOWNLOAD)
+
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        cr = glob.glob(os.path.join(pasta, "*.crdownload"))
+        if not cr:
+            break
+        time.sleep(0.5)
+
+    pdfs = glob.glob(os.path.join(pasta, "*.pdf"))
+    if not pdfs:
+        raise RuntimeError("Download não apareceu na pasta (nenhum .pdf encontrado).")
+
+    ultimo = max(pdfs, key=os.path.getmtime)
+    destino = os.path.join(pasta, _sanitize_filename(nome))
+
+    if os.path.exists(destino):
+        os.remove(destino)
+
+    os.rename(ultimo, destino)
+    sb.switch_to_default_content()
 
 
 def get_seis_enviados(dados: list[dict]) -> list[str]:
@@ -299,10 +348,32 @@ if __name__ == "__main__":
     results_map: dict[str, str | None] = {}
     mudancas: list[tuple[str, str | None, str | None]] = []
 
-    with SB(uc=False, headless=False, test=False) as sb:
+    with SB(
+        uc=False,
+        headless=False,
+        test=False,
+        chromium_arg="--disable-popup-blocking",
+        download_folder="notas_fiscais"
+    ) as sb:
         login_sei(sb, orgao="CEHAB")
 
         for sei in seis_enviados:
+            results_map[sei] = ultima_nota
+            old_val = old_map.get(sei)
+
+            if ultima_nota is not None and old_val != ultima_nota:
+                mudancas.append((sei, old_val, ultima_nota))
+
+                switch_to_arvore(sb)
+                xp_doc = f"//a[normalize-space()='{ultima_nota}']"
+                sb.js_click(xp_doc)
+                sb.sleep(2)
+
+                baixar_pdf_visualizador(
+                    sb,
+                    pasta="notas_fiscais",
+                    nome=f"{sei.replace('/', '_')}.pdf"
+                )
             try:
                 sb.switch_to_default_content()
 
@@ -324,6 +395,20 @@ if __name__ == "__main__":
                             ultima_nota = item
 
                     sb.sleep(0.2)
+                
+                old_val = old_map.get(sei)
+
+                if ultima_nota and old_val != ultima_nota:
+                    switch_to_arvore(sb)
+                    xp_doc = f"//a[normalize-space()='{ultima_nota}']"
+                    sb.js_click(xp_doc)
+                    sb.sleep(2)
+
+                    baixar_pdf_visualizador(
+                        sb,
+                        pasta="notas_fiscais",
+                        nome=f"{sei.replace('/', '_')}.pdf"
+                    )
 
                 results_map[sei] = ultima_nota
 
@@ -333,7 +418,7 @@ if __name__ == "__main__":
                     mudancas.append((sei, old_val, ultima_nota))
 
             except Exception:
-                results_map[sei] = None
+                results_map[sei] = old_map.get(sei)
 
     salvar_json(JSON_PATH, results_map)
 
