@@ -3,11 +3,14 @@ import os
 import re
 import gspread
 from google.oauth2.service_account import Credentials
+import json
+from datetime import datetime
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1lkM9yOjhu_D2nQjRFl-Wt6lNgWPvzl2wbQiaO633-KM/edit"
 SHEET_ID  = "1lkM9yOjhu_D2nQjRFl-Wt6lNgWPvzl2wbQiaO633-KM"
 WORKSHEET_GID = 1189147903
 CRED_JSON = r"formulariosolicitacaopagamento-6292734a5ede.json"
+JSON_PATH = "ultimas_notas.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -399,18 +402,63 @@ def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
         depois2_lista = snap()
         depois2_set = set(depois2_lista)
 
-        # itens da pasta = (aberto - fechado), mantendo a ordem do "aberto"
         diff = depois2_set - fechado_set
         itens = [t for t in depois2_lista if t in diff]
         return itens
 
-    # Caso normal: ABRIU no 1º clique
     diff = depois1_set - antes_set
     itens = [t for t in depois1_lista if t in diff]
     return itens
 
 def is_nota_fiscal(texto: str) -> bool:
-    return "NOTA FISCAL" in (texto or "").upper()
+    t = (texto or "").strip().upper()
+    return t.startswith("NOTA FISCAL")
+
+def carregar_json(path: str) -> dict[str, str | None]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # garante formato {sei: (str|None)}
+        if isinstance(data, dict):
+            return {str(k): (v if (v is None or isinstance(v, str)) else str(v)) for k, v in data.items()}
+        return {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def salvar_json(path: str, data: dict[str, str | None]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def comparar_mapas(antigo: dict[str, str | None], novo: dict[str, str | None]) -> dict:
+    alterados = []
+    novos = []
+    removidos = []
+
+    for sei, novo_val in novo.items():
+        if sei not in antigo:
+            novos.append(sei)
+        else:
+            if antigo[sei] != novo_val:
+                alterados.append(sei)
+
+    for sei in antigo.keys():
+        if sei not in novo:
+            removidos.append(sei)
+
+    return {"novos": novos, "alterados": alterados, "removidos": removidos}
+
+
+# =========================
+# ... seu código acima ...
+# =========================
+
+def is_nota_fiscal(texto: str) -> bool:
+    t = (texto or "").strip().upper()
+    return t.startswith("NOTA FISCAL")
 
 if __name__ == "__main__":
     aba, dados = read_sheet_rows(SHEET_ID, WORKSHEET_GID)
@@ -418,6 +466,12 @@ if __name__ == "__main__":
     seis_enviados = get_seis_enviados(dados)
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
+
+    # carrega o JSON antigo
+    old_map = carregar_json(JSON_PATH)
+
+    # aqui vamos montar o JSON novo
+    results_map: dict[str, str | None] = {}
 
     with SB(uc=False, headless=False, test=False) as sb:
         login_sei(sb, orgao="CEHAB")
@@ -441,16 +495,34 @@ if __name__ == "__main__":
 
                     for item in itens:
                         if is_nota_fiscal(item):
-                            ultima_nota = item
+                            ultima_nota = item  # pega a última "Nota Fiscal..." encontrada
 
                     sb.sleep(0.2)
 
+                # guarda no mapa novo
+                results_map[sei] = ultima_nota
+
+                # imprime no formato que você quer
                 print(f"{sei} : {ultima_nota}")
 
                 sb.sleep(0.2)
 
             except Exception as e:
+                results_map[sei] = None
                 print(f"{sei} : ERRO ({type(e).__name__})")
 
         sb.switch_to_default_content()
-        input("ENTER para fechar...")
+
+    # compara e salva
+    diff = comparar_mapas(old_map, results_map)
+
+    salvar_json(JSON_PATH, results_map)
+
+    print("\n=== RESUMO ===")
+    print("Arquivo JSON:", JSON_PATH)
+    print("Novos:", len(diff["novos"]))
+    print("Alterados:", len(diff["alterados"]))
+    print("Removidos:", len(diff["removidos"]))
+    print("Atualizado em:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    input("ENTER para fechar...")
