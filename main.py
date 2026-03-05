@@ -383,7 +383,6 @@ def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
     except Exception:
         sb.click(xp)
 
-    print(f"📂 Alternando Pasta {pasta_num} ...")
     depois1_lista = snap()
     depois1_set = set(depois1_lista)
 
@@ -415,58 +414,43 @@ def is_nota_fiscal(texto: str) -> bool:
 
 if __name__ == "__main__":
     aba, dados = read_sheet_rows(SHEET_ID, WORKSHEET_GID)
-    print(f"✅ Aba lida: {aba}")
-    print(f"✅ Linhas de dados: {len(dados)}")
 
     seis_enviados = get_seis_enviados(dados)
-    print(f"📌 SEIs com STATUS=ENVIADO: {len(seis_enviados)}")
-
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
 
-    sei_teste = seis_enviados[0]
-    print("🧪 SEI de teste:", sei_teste)
-
     with SB(uc=False, headless=False, test=False) as sb:
         login_sei(sb, orgao="CEHAB")
-        print("✅ Logado no SEI com sucesso!")
 
-        # 1) pesquisa o SEI
-        pesquisar_sei(sb, sei_teste)
+        for sei in seis_enviados:
+            try:
+                sb.switch_to_default_content()
 
-        # 2) vai pra árvore (iframe)
-        switch_to_arvore(sb)
+                pesquisar_sei(sb, sei)
 
-        # 3) espera carregar
-        esperar_sumir_aguarde(sb, timeout=30)
-        sb.sleep(0.6)
+                switch_to_arvore(sb)
+                esperar_sumir_aguarde(sb, timeout=30)
+                sb.sleep(0.4)
 
-        # 4) detecta quantas pastas existem
-        pastas = detectar_pastas(sb)
-        print("📌 Pastas detectadas:", pastas if pastas else "Nenhuma joinPASTA encontrada")
+                pastas = detectar_pastas(sb)
+                ultima_nota = None
 
-        ultima_nota = None
-        itens_por_pasta: dict[int, list[str]] = {}
+                for p in pastas:
+                    switch_to_arvore(sb)
+                    itens = abrir_pasta_e_pegar_itens(sb, p)
 
-        # 5) abre em ordem e lista os arquivos “novos” de cada pasta
-        for p in pastas:
-            # (opcional, mas ajuda se o SEI “perder” o frame em algum momento)
-            switch_to_arvore(sb)
+                    for item in itens:
+                        if is_nota_fiscal(item):
+                            ultima_nota = item
 
-            novos = abrir_pasta_e_pegar_itens(sb, p)
-            itens_por_pasta[p] = novos
+                    sb.sleep(0.2)
 
-            print(f"📄 Itens da Pasta {p}: {len(novos)}")
-            for item in novos:
-                print(" -", item)
-                if is_nota_fiscal(item):
-                    ultima_nota = item
+                print(f"{sei} : {ultima_nota}")
 
-            sb.sleep(0.8)
-         # “com calma” entre pastas
+                sb.sleep(0.2)
 
-        print("\n🧾 Última Nota Fiscal encontrada:", ultima_nota)
-        print("📌 Resultado final:", {sei_teste: ultima_nota})
+            except Exception as e:
+                print(f"{sei} : ERRO ({type(e).__name__})")
 
         sb.switch_to_default_content()
         input("ENTER para fechar...")
