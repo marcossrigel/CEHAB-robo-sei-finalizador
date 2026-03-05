@@ -98,6 +98,34 @@ def read_sheet_rows(sheet_url_or_id: str, gid: int):
 def normalize(s: str) -> str:
     return (s or "").strip().upper()
 
+
+def listar_todos_os_arquivos_na_arvore(sb: SB, limite: int | None = None) -> list[str]:
+    sb.wait_for_ready_state_complete()
+    sb.sleep(1)
+
+    els = sb.find_elements("//a")   # ✅ aqui é o ajuste
+
+    itens = []
+    for el in els:
+        try:
+            t = (el.text or "").strip()
+            if t and len(t) >= 2:
+                itens.append(t)
+        except Exception:
+            pass
+
+    seen = set()
+    out = []
+    for t in itens:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    if limite is not None:
+        return out[:limite]
+    return out
+
+
 def get_seis_enviados(dados: list[dict]) -> list[str]:
     if not dados:
         return []
@@ -160,7 +188,7 @@ def buscar_ultima_nota_fiscal(sb: SB) -> str | None:
     e retorna o último encontrado.
     """
 
-    xp_notas = "//a[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'NOTA FISCAL')]"
+    xp_notas = "//a[contains(translate(normalize-space(.),'abcdefghijklmnopqrstuvwxyzáàâãäéèêëíìîïóòôõöúùûüç','ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ'),'NOTA FISCAL')]"
 
     sb.wait_for_ready_state_complete()
     sb.sleep(2)
@@ -202,13 +230,11 @@ def switch_to_arvore(sb: SB) -> None:
         except Exception:
             pass
 
-    # fallback: tenta qualquer iframe e valida se parece ser árvore (tem pastas/links)
     frames = sb.find_elements("xpath=//iframe")
     for fr in frames:
         try:
             sb.switch_to_default_content()
             sb.switch_to_frame(fr)
-            # “cheiro” de árvore: tem itens/links na coluna esquerda
             if sb.is_element_present("xpath=//a") and (sb.is_text_visible("I") or sb.is_text_visible("II")):
                 return
         except Exception:
@@ -219,11 +245,7 @@ def switch_to_arvore(sb: SB) -> None:
 
 
 def expandir_toda_arvore(sb: SB, max_passes: int = 25) -> None:
-    """
-    Clica repetidamente nos ícones de expandir (+) até não sobrar nenhum.
-    Isso garante que a pasta I, II etc. ficam abertas.
-    """
-    # XPaths comuns para “expandir”
+
     xp_expand = (
         "//img["
         "contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'expandir')"
@@ -245,9 +267,8 @@ def expandir_toda_arvore(sb: SB, max_passes: int = 25) -> None:
             break
 
         clicked_any = False
-        for b in buttons[:40]:  # evita loop infinito se tiver muita coisa
+        for b in buttons[:40]:
             try:
-                # alguns ícones são minúsculos: js_click costuma ser mais confiável
                 sb.js_click(b)
                 clicked_any = True
                 sb.sleep(0.15)
@@ -266,7 +287,6 @@ if __name__ == "__main__":
     seis_enviados = get_seis_enviados(dados)
     print(f"📌 SEIs com STATUS=ENVIADO: {len(seis_enviados)}")
 
-    # ENSAIO: só o primeiro
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
 
@@ -279,20 +299,22 @@ if __name__ == "__main__":
 
         pesquisar_sei(sb, sei_teste)
 
-        # vai pra árvore (iframe)
         switch_to_arvore(sb)
 
-        # abre todas as pastas (inclui I e II)
         expandir_toda_arvore(sb)
+        sb.sleep(1.5)
 
-        # agora sim pega a última Nota Fiscal
-        nota = buscar_ultima_nota_fiscal_na_arvore(sb)
+        switch_to_arvore(sb)
 
-        # volta pro conteúdo padrão (boa prática)
+        expandir_toda_arvore(sb)
+        sb.sleep(2)
+
+        arquivos = listar_todos_os_arquivos_na_arvore(sb)
+
         sb.switch_to_default_content()
 
-        resultado = {sei_teste: nota}
-        print("📌 Resultado:")
-        print(resultado)
+        print(f"📄 Itens encontrados na árvore: {len(arquivos)}")
+        for a in arquivos:
+            print(" -", a)
 
         input("ENTER para fechar...")
