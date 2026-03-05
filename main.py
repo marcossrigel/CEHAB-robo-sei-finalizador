@@ -25,7 +25,7 @@ CSS_SELECT_ORGAO = "#selOrgao"
 CSS_BTN_ACESSAR = "#sbmAcessar"
 
 XP_TXT_PESQUISA_RAPIDA = '//*[@id="txtPesquisaRapida"]'
-XP_BTN_LUPA_PESQUISA = '//*[@id="spnInfraUnidade"]/img'  # lupa
+XP_BTN_LUPA_PESQUISA = '//*[@id="spnInfraUnidade"]/img'
 
 def login_sei(sb: SB, orgao: str = "CEHAB") -> None:
     sei_user = os.getenv("SEI_USER", "marcos.rigel")
@@ -102,33 +102,6 @@ def normalize(s: str) -> str:
     return (s or "").strip().upper()
 
 
-def listar_todos_os_arquivos_na_arvore(sb: SB, limite: int | None = None) -> list[str]:
-    sb.wait_for_ready_state_complete()
-    sb.sleep(1)
-
-    els = sb.find_elements("//a")   # ✅ aqui é o ajuste
-
-    itens = []
-    for el in els:
-        try:
-            t = (el.text or "").strip()
-            if t and len(t) >= 2:
-                itens.append(t)
-        except Exception:
-            pass
-
-    seen = set()
-    out = []
-    for t in itens:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-
-    if limite is not None:
-        return out[:limite]
-    return out
-
-
 def get_seis_enviados(dados: list[dict]) -> list[str]:
     if not dados:
         return []
@@ -156,7 +129,6 @@ def get_seis_enviados(dados: list[dict]) -> list[str]:
             if sei:
                 seis.append(sei)
 
-    # remove duplicados mantendo ordem
     seen = set()
     out = []
     for s in seis:
@@ -167,10 +139,7 @@ def get_seis_enviados(dados: list[dict]) -> list[str]:
 
 
 def esperar_sumir_aguarde(sb: SB, timeout: int = 20):
-    """
-    Espera o SEI terminar de carregar a árvore (quando aparece 'Aguarde...').
-    """
-    for _ in range(timeout * 2):  # checa a cada 0.5s
+    for _ in range(timeout * 2):
         try:
             if not sb.is_text_visible("Aguarde"):
                 return
@@ -178,22 +147,6 @@ def esperar_sumir_aguarde(sb: SB, timeout: int = 20):
             pass
         sb.sleep(0.5)
 
-
-def abrir_todas_as_pastas(sb: SB, limite: int = 10):
-    for i in range(1, limite + 1):
-        xp = f"//*[@id='joinPASTA{i}']"
-        try:
-            if sb.is_element_present(xp):
-                sb.js_click(xp)
-                print(f"📂 Clique na Pasta {i}")
-                esperar_sumir_aguarde(sb, timeout=20)
-                sb.sleep(0.3)
-        except Exception:
-            pass
-
-# =========================
-# 1) PESQUISAR UM SEI
-# =========================
 def pesquisar_sei(sb: SB, sei: str) -> None:
     sb.wait_for_element_visible(XP_TXT_PESQUISA_RAPIDA, timeout=30)
     sb.click(XP_TXT_PESQUISA_RAPIDA)
@@ -207,51 +160,12 @@ def pesquisar_sei(sb: SB, sei: str) -> None:
         sb.js_click(XP_BTN_LUPA_PESQUISA)
 
     sb.wait_for_ready_state_complete()
-    sb.sleep(1.2)  # dá tempo da árvore renderizar
-
-# =========================
-# 2) PEGAR ÚLTIMA "NOTA FISCAL" DA ÁRVORE
-def buscar_ultima_nota_fiscal(sb: SB) -> str | None:
-    """
-    Procura na árvore do SEI qualquer item contendo 'Nota Fiscal'
-    e retorna o último encontrado.
-    """
-
-    xp_notas = "//a[contains(translate(normalize-space(.),'abcdefghijklmnopqrstuvwxyzáàâãäéèêëíìîïóòôõöúùûüç','ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ'),'NOTA FISCAL')]"
-
-    sb.wait_for_ready_state_complete()
-    sb.sleep(2)
-
-    try:
-        elementos = sb.find_elements(xp_notas)
-    except Exception:
-        elementos = []
-
-    notas = []
-    for el in elementos:
-        try:
-            texto = el.text.strip()
-            if "NOTA FISCAL" in texto.upper():
-                notas.append(texto)
-        except:
-            pass
-
-    if not notas:
-        return None
-
-    return notas[-1]
-
-
-# ========= ÁRVORE / PASTAS =========
+    sb.sleep(1.2)
 
 def switch_to_arvore(sb: SB) -> None:
-    """
-    No SEI, a árvore geralmente fica em um iframe (comum: 'ifrArvore').
-    Tenta trocar automaticamente para o frame certo.
-    """
+
     sb.switch_to_default_content()
 
-    # tenta nomes comuns do SEI
     for name in ["ifrArvore", "ifrArvoreHtml", "ifrArvoreVisualizacao", "ifrArvoreProcesso"]:
         try:
             sb.switch_to_frame(name)
@@ -273,47 +187,7 @@ def switch_to_arvore(sb: SB) -> None:
     raise RuntimeError("Não consegui localizar o iframe da árvore (ifrArvore).")
 
 
-def expandir_toda_arvore(sb: SB, max_passes: int = 25) -> None:
-
-    xp_expand = (
-        "//img["
-        "contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'expandir')"
-        " or contains(translate(@alt,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'expandir')"
-        " or contains(@src,'mais') or contains(@src,'plus') or contains(@src,'expand')"
-        "]"
-    )
-
-    for _ in range(max_passes):
-        sb.wait_for_ready_state_complete()
-        sb.sleep(0.4)
-
-        try:
-            buttons = sb.find_elements(f"xpath={xp_expand}")
-        except Exception:
-            buttons = []
-
-        if not buttons:
-            break
-
-        clicked_any = False
-        for b in buttons[:40]:
-            try:
-                sb.js_click(b)
-                clicked_any = True
-                sb.sleep(0.15)
-            except Exception:
-                pass
-
-        if not clicked_any:
-            break
-
-
 def detectar_pastas(sb: SB) -> list[int]:
-    """
-    Encontra todos os elementos com id joinPASTA{n} e retorna [n] ordenado.
-    Ex: [1,2,3]
-    """
-    # pega todos elementos cujo id começa com joinPASTA
     els = sb.find_elements("//a[starts-with(@id,'joinPASTA')] | //* [starts-with(@id,'joinPASTA')]")
     nums = []
     for el in els:
@@ -325,21 +199,15 @@ def detectar_pastas(sb: SB) -> list[int]:
         except Exception:
             pass
 
-    # remove duplicados e ordena
     nums = sorted(set(nums))
     return nums
 
 def coletar_itens_visiveis(sb: SB) -> list[str]:
-    """
-    Coleta textos dos <a> visíveis/úteis dentro da árvore.
-    (mesma ideia da sua listar_todos..., mas retorna lista limpa)
-    """
     els = sb.find_elements("//a")
     itens = []
     for el in els:
         try:
             t = (el.text or "").strip()
-            # filtra lixos comuns
             if not t:
                 continue
             if t.lower() == "aguarde...":
@@ -349,8 +217,6 @@ def coletar_itens_visiveis(sb: SB) -> list[str]:
             itens.append(t)
         except Exception:
             pass
-
-    # remove duplicados mantendo ordem
     seen = set()
     out = []
     for t in itens:
@@ -360,14 +226,7 @@ def coletar_itens_visiveis(sb: SB) -> list[str]:
     return out
 
 def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
-    """
-    Garante que a pasta fique ABERTA e retorna os itens que pertencem a ela.
 
-    - Se a pasta já estava aberta, o 1º clique fecha (lista diminui).
-      Aí a gente clica de novo para abrir e calcula itens = (aberta - fechada).
-    - Se a pasta estava fechada, o 1º clique abre (lista aumenta).
-      Aí itens = (aberta - antes).
-    """
     def snap():
         esperar_sumir_aguarde(sb, timeout=30)
         sb.sleep(0.4)
@@ -380,7 +239,6 @@ def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
     antes_lista = snap()
     antes_set = set(antes_lista)
 
-    # 1º clique (pode abrir OU fechar)
     try:
         sb.js_click(xp)
     except Exception:
@@ -389,7 +247,6 @@ def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
     depois1_lista = snap()
     depois1_set = set(depois1_lista)
 
-    # Se diminuiu, provavelmente FECHOU -> clica de novo pra ABRIR
     if len(depois1_set) < len(antes_set):
         fechado_lista = depois1_lista
         fechado_set = depois1_set
@@ -410,15 +267,10 @@ def abrir_pasta_e_pegar_itens(sb: SB, pasta_num: int) -> list[str]:
     itens = [t for t in depois1_lista if t in diff]
     return itens
 
-def is_nota_fiscal(texto: str) -> bool:
-    t = (texto or "").strip().upper()
-    return t.startswith("NOTA FISCAL")
-
 def carregar_json(path: str) -> dict[str, str | None]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # garante formato {sei: (str|None)}
         if isinstance(data, dict):
             return {str(k): (v if (v is None or isinstance(v, str)) else str(v)) for k, v in data.items()}
         return {}
@@ -432,30 +284,6 @@ def salvar_json(path: str, data: dict[str, str | None]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
-def comparar_mapas(antigo: dict[str, str | None], novo: dict[str, str | None]) -> dict:
-    alterados = []
-    novos = []
-    removidos = []
-
-    for sei, novo_val in novo.items():
-        if sei not in antigo:
-            novos.append(sei)
-        else:
-            if antigo[sei] != novo_val:
-                alterados.append(sei)
-
-    for sei in antigo.keys():
-        if sei not in novo:
-            removidos.append(sei)
-
-    return {"novos": novos, "alterados": alterados, "removidos": removidos}
-
-
-# =========================
-# ... seu código acima ...
-# =========================
-
 def is_nota_fiscal(texto: str) -> bool:
     t = (texto or "").strip().upper()
     return t.startswith("NOTA FISCAL")
@@ -467,11 +295,9 @@ if __name__ == "__main__":
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
 
-    # carrega o JSON antigo
     old_map = carregar_json(JSON_PATH)
-
-    # aqui vamos montar o JSON novo
     results_map: dict[str, str | None] = {}
+    mudancas: list[tuple[str, str | None, str | None]] = []
 
     with SB(uc=False, headless=False, test=False) as sb:
         login_sei(sb, orgao="CEHAB")
@@ -495,34 +321,26 @@ if __name__ == "__main__":
 
                     for item in itens:
                         if is_nota_fiscal(item):
-                            ultima_nota = item  # pega a última "Nota Fiscal..." encontrada
+                            ultima_nota = item
 
                     sb.sleep(0.2)
 
-                # guarda no mapa novo
                 results_map[sei] = ultima_nota
 
-                # imprime no formato que você quer
-                print(f"{sei} : {ultima_nota}")
+                old_val = old_map.get(sei)
 
-                sb.sleep(0.2)
+                if ultima_nota is not None and old_val != ultima_nota:
+                    mudancas.append((sei, old_val, ultima_nota))
 
-            except Exception as e:
+            except Exception:
                 results_map[sei] = None
-                print(f"{sei} : ERRO ({type(e).__name__})")
-
-        sb.switch_to_default_content()
-
-    # compara e salva
-    diff = comparar_mapas(old_map, results_map)
 
     salvar_json(JSON_PATH, results_map)
 
-    print("\n=== RESUMO ===")
-    print("Arquivo JSON:", JSON_PATH)
-    print("Novos:", len(diff["novos"]))
-    print("Alterados:", len(diff["alterados"]))
-    print("Removidos:", len(diff["removidos"]))
+    for sei, old_val, new_val in mudancas:
+        print(f"{sei} : {new_val}")
+
+    print(f"\nAtualizações encontradas: {len(mudancas)}")
     print("Atualizado em:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     input("ENTER para fechar...")
