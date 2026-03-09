@@ -5,6 +5,7 @@ import glob
 import time
 import gspread
 from google.oauth2.service_account import Credentials
+from selenium.common.exceptions import InvalidSessionIdException
 import json
 from datetime import datetime
 
@@ -25,6 +26,7 @@ XP_USUARIO = '//*[@id="txtUsuario"]'
 XP_SENHA = '//*[@id="pwdSenha"]'
 CSS_SELECT_ORGAO = "#selOrgao"
 CSS_BTN_ACESSAR = "#sbmAcessar"
+BAIXAR_PDF = False
 
 XP_TXT_PESQUISA_RAPIDA = '//*[@id="txtPesquisaRapida"]'
 XP_BTN_LUPA_PESQUISA = '//*[@id="spnInfraUnidade"]/img'
@@ -111,8 +113,17 @@ def _sanitize_filename(s: str) -> str:
 def baixar_pdf_visualizador(sb: SB, pasta="notas_fiscais", nome="nota.pdf", timeout=60):
     os.makedirs(pasta, exist_ok=True)
 
+    handles_antes = sb.driver.window_handles
+    sb.sleep(2)
+
+    handles_depois = sb.driver.window_handles
+    if len(handles_depois) > len(handles_antes):
+        sb.switch_to_window(-1)
+        sb.sleep(1)
+
     sb.switch_to_default_content()
     iframe_encontrado = False
+
     for fr in sb.find_elements("xpath=//iframe"):
         try:
             sb.switch_to_default_content()
@@ -134,7 +145,10 @@ def baixar_pdf_visualizador(sb: SB, pasta="notas_fiscais", nome="nota.pdf", time
     while time.time() - t0 < timeout:
         cr = glob.glob(os.path.join(pasta, "*.crdownload"))
         if not cr:
-            break
+            time.sleep(1)
+            pdfs = glob.glob(os.path.join(pasta, "*.pdf"))
+            if pdfs:
+                break
         time.sleep(0.5)
 
     pdfs = glob.glob(os.path.join(pasta, "*.pdf"))
@@ -148,6 +162,14 @@ def baixar_pdf_visualizador(sb: SB, pasta="notas_fiscais", nome="nota.pdf", time
         os.remove(destino)
 
     os.rename(ultimo, destino)
+
+    try:
+        if len(sb.driver.window_handles) > 1:
+            sb.close_current_window()
+            sb.switch_to_window(0)
+    except Exception:
+        pass
+
     sb.switch_to_default_content()
 
 
@@ -344,6 +366,8 @@ if __name__ == "__main__":
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
 
+    seis_enviados = seis_enviados[:1]
+
     old_map = carregar_json(JSON_PATH)
     results_map: dict[str, str | None] = {}
     mudancas: list[tuple[str, str | None, str | None]] = []
@@ -351,42 +375,33 @@ if __name__ == "__main__":
     with SB(
         uc=False,
         headless=False,
-        test=False,
-        chromium_arg="--disable-popup-blocking",
-        download_folder="notas_fiscais"
+        test=False
     ) as sb:
         login_sei(sb, orgao="CEHAB")
 
         for sei in seis_enviados:
-            results_map[sei] = ultima_nota
-            old_val = old_map.get(sei)
-
-            if ultima_nota is not None and old_val != ultima_nota:
-                mudancas.append((sei, old_val, ultima_nota))
-
-                switch_to_arvore(sb)
-                xp_doc = f"//a[normalize-space()='{ultima_nota}']"
-                sb.js_click(xp_doc)
-                sb.sleep(2)
-
-                baixar_pdf_visualizador(
-                    sb,
-                    pasta="notas_fiscais",
-                    nome=f"{sei.replace('/', '_')}.pdf"
-                )
             try:
+                print(f"\n--- Processando {sei} ---")
+
+                print("1. Voltando ao conteúdo padrão")
                 sb.switch_to_default_content()
 
+                print("2. Pesquisando SEI")
                 pesquisar_sei(sb, sei)
 
+                print("3. Indo para árvore")
                 switch_to_arvore(sb)
+
+                print("4. Esperando carregamento")
                 esperar_sumir_aguarde(sb, timeout=30)
                 sb.sleep(0.4)
 
+                print("5. Detectando pastas")
                 pastas = detectar_pastas(sb)
                 ultima_nota = None
 
                 for p in pastas:
+                    print(f"   Pasta {p}")
                     switch_to_arvore(sb)
                     itens = abrir_pasta_e_pegar_itens(sb, p)
 
@@ -395,29 +410,47 @@ if __name__ == "__main__":
                             ultima_nota = item
 
                     sb.sleep(0.2)
-                
+
+                print(f"6. Última nota encontrada: {ultima_nota}")
                 old_val = old_map.get(sei)
-
-                if ultima_nota and old_val != ultima_nota:
-                    switch_to_arvore(sb)
-                    xp_doc = f"//a[normalize-space()='{ultima_nota}']"
-                    sb.js_click(xp_doc)
-                    sb.sleep(2)
-
-                    baixar_pdf_visualizador(
-                        sb,
-                        pasta="notas_fiscais",
-                        nome=f"{sei.replace('/', '_')}.pdf"
-                    )
-
                 results_map[sei] = ultima_nota
 
-                old_val = old_map.get(sei)
-
                 if ultima_nota is not None and old_val != ultima_nota:
+                    print("7. Documento mudou")
+
+                    if BAIXAR_PDF:
+                        print("8. Abrindo documento")
+                        switch_to_arvore(sb)
+                        xp_doc = f"//a[contains(normalize-space(), '{ultima_nota}')]"
+                        sb.wait_for_element_clickable(xp_doc, timeout=20)
+                        try:
+                            sb.click(xp_doc)
+                        except Exception:
+                            sb.js_click(xp_doc)
+
+                        sb.sleep(2)
+
+                        print("9. Baixando PDF")
+                        baixar_pdf_visualizador(
+                            sb,
+                            pasta="notas_fiscais",
+                            nome=f"{sei.replace('/', '_')}.pdf"
+                        )
+                        print("10. PDF baixado com sucesso")
+
                     mudancas.append((sei, old_val, ultima_nota))
 
-            except Exception:
+            except InvalidSessionIdException as e:
+                print(f"\n[ERRO FATAL] SEI: {sei}")
+                print(f"Tipo: {type(e).__name__}")
+                print(f"Mensagem: {e}")
+                results_map[sei] = old_map.get(sei)
+                break
+
+            except Exception as e:
+                print(f"\n[ERRO] SEI: {sei}")
+                print(f"Tipo: {type(e).__name__}")
+                print(f"Mensagem: {e}")
                 results_map[sei] = old_map.get(sei)
 
     salvar_json(JSON_PATH, results_map)
