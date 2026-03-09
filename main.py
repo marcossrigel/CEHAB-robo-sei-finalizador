@@ -366,8 +366,6 @@ if __name__ == "__main__":
     if not seis_enviados:
         raise SystemExit("Sem SEIs com STATUS=ENVIADO.")
 
-    seis_enviados = seis_enviados[:1]
-
     old_map = carregar_json(JSON_PATH)
     results_map: dict[str, str | None] = {}
     mudancas: list[tuple[str, str | None, str | None]] = []
@@ -381,22 +379,15 @@ if __name__ == "__main__":
 
         for sei in seis_enviados:
             try:
-                print(f"\n--- Processando {sei} ---")
+                print(f"\nSEI: {sei}")
 
-                print("1. Voltando ao conteúdo padrão")
                 sb.switch_to_default_content()
-
-                print("2. Pesquisando SEI")
                 pesquisar_sei(sb, sei)
 
-                print("3. Indo para árvore")
                 switch_to_arvore(sb)
-
-                print("4. Esperando carregamento")
                 esperar_sumir_aguarde(sb, timeout=30)
                 sb.sleep(0.4)
 
-                print("5. Detectando pastas")
                 pastas = detectar_pastas(sb)
                 ultima_nota = None
 
@@ -411,7 +402,7 @@ if __name__ == "__main__":
 
                     sb.sleep(0.2)
 
-                print(f"6. Última nota encontrada: {ultima_nota}")
+                print(f" -> Última nota encontrada: {ultima_nota}")
                 old_val = old_map.get(sei)
                 results_map[sei] = ultima_nota
 
